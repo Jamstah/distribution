@@ -159,6 +159,17 @@ func (err InvalidOffsetError) Error() string {
 	return fmt.Sprintf("%s: invalid offset: %d for path: %s", err.DriverName, err.Offset, err.Path)
 }
 
+// FailedDeleteError is returned when attepmting a delete failed
+type FailedDeleteError struct {
+	Path       string
+	Message    string
+	DriverName string
+}
+
+func (err FailedDeleteError) Error() string {
+	return fmt.Sprintf("%s: failed to delete path: %s: %s", err.DriverName, err.Path, err.Message)
+}
+
 // Error is a catch-all error type which captures an error string and
 // the driver type on which it occurred.
 type Error struct {

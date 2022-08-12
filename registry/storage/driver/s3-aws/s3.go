@@ -937,7 +937,7 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 			// by default the response returns up to 1,000 key names. The response _might_ contain fewer keys but it will never contain more.
 			// 10000 keys is coincidentally (?) also the max number of keys that can be deleted in a single Delete operation, so we'll just smack
 			// Delete here straight away and reset the object slice when successful.
-			_, err = d.S3.DeleteObjects(&s3.DeleteObjectsInput{
+			resp, err := d.S3.DeleteObjects(&s3.DeleteObjectsInput{
 				Bucket: aws.String(d.Bucket),
 				Delete: &s3.Delete{
 					Objects: s3Objects,
@@ -947,7 +947,15 @@ func (d *driver) Delete(ctx context.Context, path string) error {
 			if err != nil {
 				return err
 			}
-
+			// even if err is nil (200 OK response) it's not guaranteed that all files have been successfully deleted,
+			// we need to check the []*s3.Error slice within the S3 response and make sure it's empty.
+			if len(resp.Errors) > 0 {
+				return storagedriver.FailedDeleteError{
+					DriverName: driverName,
+					Path:       *resp.Errors[0].Key,
+					Message:    *resp.Errors[0].Message,
+				}
+			}
 		}
 		// NOTE: we don't want to reallocate
 		// the slice so we simply "reset" it

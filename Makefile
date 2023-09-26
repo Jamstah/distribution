@@ -3,6 +3,9 @@
 # Root directory of the project (absolute path).
 ROOTDIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
+# Tools
+COMPOSE=docker compose
+
 # Used to populate version variable in main package.
 VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always)
 REVISION ?= $(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
@@ -122,18 +125,18 @@ test-cloud-storage: start-cloud-storage run-s3-tests stop-cloud-storage ## run c
 
 .PHONY: start-cloud-storage
 start-cloud-storage: ## start local cloud storage (minio)
-	docker compose -f tests/docker-compose-storage.yml up minio minio-init -d
+	$(COMPOSE) -f tests/docker-compose-storage.yml up minio minio-init -d
 
 .PHONY: stop-cloud-storage
 stop-cloud-storage: ## stop local cloud storage (minio)
-	docker compose -f tests/docker-compose-storage.yml down
+	$(COMPOSE) -f tests/docker-compose-storage.yml down
 
 .PHONY: reset-cloud-storage
 reset-cloud-storage: ## reset (stop, delete, start) local cloud storage (minio)
-	docker compose -f tests/docker-compose-storage.yml down
+	$(COMPOSE) -f tests/docker-compose-storage.yml down
 	@mkdir -p tests/miniodata/distribution
 	@rm -rf tests/miniodata/distribution/* tests/miniodata/.minio.sys
-	docker compose -f tests/docker-compose-storage.yml up minio minio-init -d
+	$(COMPOSE) -f tests/docker-compose-storage.yml up minio minio-init -d
 
 .PHONY: run-s3-tests
 run-s3-tests: ## run S3 storage driver integration tests
@@ -144,7 +147,9 @@ run-s3-tests: ## run S3 storage driver integration tests
 	S3_ENCRYPT=false \
 	REGION_ENDPOINT=http://127.0.0.1:9000 \
 	S3_SECURE=false \
-	go test -v -count=1 ./registry/storage/driver/s3-aws/...
+	S3_ACCELERATE=false \
+	AWS_S3_FORCE_PATH_STYLE=true \
+	go test ${TESTFLAGS} -count=1 ./registry/storage/driver/s3-aws/...
 
 ##@ Validate
 

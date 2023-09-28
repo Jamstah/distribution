@@ -8,13 +8,10 @@ on:
   push:
     branches:
       - 'main'
-      - 'release/*'
-    tags:
-      - 'v*'
   pull_request:
 
 env:
-  DOCKERHUB_SLUG: distribution/distribution
+  GHCR_SLUG: ghcr.io/distribution/distribution
 
 permissions:
   contents: read # to fetch code (actions/checkout)
@@ -49,7 +46,8 @@ jobs:
 
   build:
     permissions:
-      contents: write # to create GitHub release (softprops/action-gh-release)
+      id-token: 'write' # to write to GHCR
+      packages: 'write' # to write to GHCR
 
     runs-on: ubuntu-latest
     needs:
@@ -67,21 +65,15 @@ jobs:
         with:
           images: |
             ${{ env.DOCKERHUB_SLUG }}
-          ### versioning strategy
-          ### push semver tag v3.2.1 on main (default branch)
-          # distribution/distribution:3.2.1
-          # distribution/distribution:3.2
-          # distribution/distribution:3
-          # distribution/distribution:latest
-          ### push semver prelease tag v3.0.0-beta.1 on main (default branch)
-          # distribution/distribution:3.0.0-beta.1
-          ### push on main
-          # distribution/distribution:edge
+          ### push on PRs and main
+          # ghcr.io/distribution/distribution:pr<number>
+          # ghcr.io/distribution/distribution:sha<sha>
+          # ghcr.io/distribution/distribution:main
+          # ghcr.io/distribution/distribution:edge
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=ref,event=pr
+            type=ref,event=branch
+            type=sha
             type=edge
           labels: |
             org.opencontainers.image.title=Distribution
@@ -89,13 +81,12 @@ jobs:
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      -
-        name: Login to DockerHub
-        if: github.event_name != 'pull_request'
+      - name: Login to GHCR
         uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       -
         name: Build artifacts
         uses: docker/bake-action@v2
@@ -120,15 +111,4 @@ jobs:
             ./docker-bake.hcl
             ${{ steps.meta.outputs.bake-file }}
           targets: image-all
-          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
-      -
-        name: GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          draft: true
-          files: |
-            bin/*.tar.gz
-            bin/*.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          push: true

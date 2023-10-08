@@ -2,75 +2,54 @@ package token
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/distribution/distribution/v3/context"
 	"github.com/distribution/distribution/v3/registry/auth"
-	"github.com/docker/libtrust"
+	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v3/jwt"
 )
 
-func makeRootKeys(numKeys int) ([]libtrust.PrivateKey, error) {
-	keys := make([]libtrust.PrivateKey, 0, numKeys)
+func makeTrustedKeyMap(rootKeys []Key) map[string]crypto.PublicKey {
+	trustedKeys := make(map[string]crypto.PublicKey, len(rootKeys))
+
+	for _, kp := range rootKeys {
+		trustedKeys[keyIDFromCryptoKey(kp.pub)] = kp.pub
+	}
+
+	return trustedKeys
+}
+
+func makeRootKeys(numKeys int) ([]Key, error) {
+	keys := make([]Key, 0, numKeys)
 
 	for i := 0; i < numKeys; i++ {
-		key, err := libtrust.GenerateECP256PrivateKey()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, err
 		}
-		keys = append(keys, key)
+		kp := Key{priv: key, pub: key.Public()}
+		keys = append(keys, kp)
 	}
 
 	return keys, nil
 }
 
-func makeSigningKeyWithChain(rootKey libtrust.PrivateKey, depth int) (libtrust.PrivateKey, error) {
-	if depth == 0 {
-		// Don't need to build a chain.
-		return rootKey, nil
-	}
-
-	var (
-		x5c       = make([]string, depth)
-		parentKey = rootKey
-		key       libtrust.PrivateKey
-		cert      *x509.Certificate
-		err       error
-	)
-
-	for depth > 0 {
-		if key, err = libtrust.GenerateECP256PrivateKey(); err != nil {
-			return nil, err
-		}
-
-		if cert, err = libtrust.GenerateCACert(parentKey, key); err != nil {
-			return nil, err
-		}
-
-		depth--
-		x5c[depth] = base64.StdEncoding.EncodeToString(cert.Raw)
-		parentKey = key
-	}
-
-	key.AddExtendedField("x5c", x5c)
-
-	return key, nil
-}
-
-func makeRootCerts(rootKeys []libtrust.PrivateKey) ([]*x509.Certificate, error) {
+func makeRootCerts(rootKeys []Key) ([]*x509.Certificate, error) {
 	certs := make([]*x509.Certificate, 0, len(rootKeys))
 
-	for _, key := range rootKeys {
-		cert, err := libtrust.GenerateCACert(key, key)
+	for _, rootKey := range rootKeys {
+		cert, err := GenerateCACert(rootKey, rootKey.pub)
 		if err != nil {
 			return nil, err
 		}
@@ -80,37 +59,70 @@ func makeRootCerts(rootKeys []libtrust.PrivateKey) ([]*x509.Certificate, error) 
 	return certs, nil
 }
 
-func makeTrustedKeyMap(rootKeys []libtrust.PrivateKey) map[string]libtrust.PublicKey {
-	trustedKeys := make(map[string]libtrust.PublicKey, len(rootKeys))
-
-	for _, key := range rootKeys {
-		trustedKeys[key.KeyID()] = key.PublicKey()
+func makeSigningKeyWithChain(rootKey *Key, depth int) (*jose.JSONWebKey, error) {
+	if depth == 0 {
+		// Don't need to build a chain.
+		return &jose.JSONWebKey{
+			Key:       rootKey.priv,
+			KeyID:     keyIDFromCryptoKey(rootKey.pub),
+			Algorithm: string(jose.ES256),
+		}, nil
 	}
 
-	return trustedKeys
+	var (
+		certs     = make([]*x509.Certificate, depth)
+		parentKey = rootKey
+
+		key  *ecdsa.PrivateKey
+		cert *x509.Certificate
+		err  error
+	)
+
+	for depth > 0 {
+		if key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
+			return nil, err
+		}
+
+		if cert, err = GenerateCACert(*parentKey, key.Public()); err != nil {
+			return nil, err
+		}
+
+		depth--
+		certs[depth] = cert
+		parentKey = &Key{priv: key, pub: key.Public()}
+	}
+
+	return &jose.JSONWebKey{
+		Key:          parentKey.priv,
+		KeyID:        keyIDFromCryptoKey(rootKey.pub),
+		Algorithm:    string(jose.ES256),
+		Certificates: certs,
+	}, nil
 }
 
-func makeTestToken(issuer, audience string, access []*ResourceActions, rootKey libtrust.PrivateKey, depth int, now time.Time, exp time.Time) (*Token, error) {
-	signingKey, err := makeSigningKeyWithChain(rootKey, depth)
+func makeTestToken(issuer, audience string, access []*ResourceActions, rootKey *Key, depth int, now time.Time, exp time.Time) (*Token, string, error) {
+	jwk, err := makeSigningKeyWithChain(rootKey, depth)
 	if err != nil {
-		return nil, fmt.Errorf("unable to make signing key with chain: %s", err)
+		return nil, "", fmt.Errorf("unable to make signing key with chain: %s", err)
 	}
 
-	var rawJWK json.RawMessage
-	rawJWK, err = signingKey.PublicKey().MarshalJSON()
-	if err != nil {
-		return nil, fmt.Errorf("unable to marshal signing key to JSON: %s", err)
+	signingKey := jose.SigningKey{
+		Algorithm: jose.ES256,
+		Key:       jwk,
 	}
+	signerOpts := jose.SignerOptions{
+		EmbedJWK: true,
+	}
+	signerOpts.WithType("JWT")
 
-	joseHeader := &Header{
-		Type:       "JWT",
-		SigningAlg: "ES256",
-		RawJWK:     &rawJWK,
+	signer, err := jose.NewSigner(signingKey, &signerOpts)
+	if err != nil {
+		return nil, "", fmt.Errorf("unable to create a signer: %s", err)
 	}
 
 	randomBytes := make([]byte, 15)
 	if _, err = rand.Read(randomBytes); err != nil {
-		return nil, fmt.Errorf("unable to read random bytes for jwt id: %s", err)
+		return nil, "", fmt.Errorf("unable to read random bytes for jwt id: %s", err)
 	}
 
 	claimSet := &ClaimSet{
@@ -124,28 +136,17 @@ func makeTestToken(issuer, audience string, access []*ResourceActions, rootKey l
 		Access:     access,
 	}
 
-	var joseHeaderBytes, claimSetBytes []byte
-
-	if joseHeaderBytes, err = json.Marshal(joseHeader); err != nil {
-		return nil, fmt.Errorf("unable to marshal jose header: %s", err)
-	}
-	if claimSetBytes, err = json.Marshal(claimSet); err != nil {
-		return nil, fmt.Errorf("unable to marshal claim set: %s", err)
+	tokenString, err := jwt.Signed(signer).Claims(claimSet).CompactSerialize()
+	if err != nil {
+		return nil, "", fmt.Errorf("unable to build token string: %v", err)
 	}
 
-	encodedJoseHeader := joseBase64UrlEncode(joseHeaderBytes)
-	encodedClaimSet := joseBase64UrlEncode(claimSetBytes)
-	encodingToSign := fmt.Sprintf("%s.%s", encodedJoseHeader, encodedClaimSet)
-
-	var signatureBytes []byte
-	if signatureBytes, _, err = signingKey.Sign(strings.NewReader(encodingToSign), crypto.SHA256); err != nil {
-		return nil, fmt.Errorf("unable to sign jwt payload: %s", err)
+	t, err := NewToken(tokenString)
+	if err != nil {
+		return nil, tokenString, fmt.Errorf("unable to create a token from %q: %v", tokenString, err)
 	}
 
-	signature := joseBase64UrlEncode(signatureBytes)
-	tokenString := fmt.Sprintf("%s.%s", encodingToSign, signature)
-
-	return NewToken(tokenString)
+	return t, tokenString, nil
 }
 
 // This test makes 4 tokens with a varying number of intermediate
@@ -185,7 +186,7 @@ func TestTokenVerify(t *testing.T) {
 	tokens := make([]*Token, 0, numTokens)
 
 	for i := 0; i < numTokens; i++ {
-		token, err := makeTestToken(issuer, audience, access, rootKeys[i], i, time.Now(), time.Now().Add(5*time.Minute))
+		token, _, err := makeTestToken(issuer, audience, access, &rootKeys[i], i, time.Now(), time.Now().Add(5*time.Minute))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,7 +201,7 @@ func TestTokenVerify(t *testing.T) {
 	}
 
 	for _, token := range tokens {
-		if err := token.Verify(verifyOps); err != nil {
+		if _, err := token.Verify(verifyOps); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -237,48 +238,48 @@ func TestLeeway(t *testing.T) {
 
 	// nbf verification should pass within leeway
 	futureNow := time.Now().Add(time.Duration(5) * time.Second)
-	token, err := makeTestToken(issuer, audience, access, rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
+	token, _, err := makeTestToken(issuer, audience, access, &rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := token.Verify(verifyOps); err != nil {
+	if _, err := token.Verify(verifyOps); err != nil {
 		t.Fatal(err)
 	}
 
 	// nbf verification should fail with a skew larger than leeway
 	futureNow = time.Now().Add(time.Duration(61) * time.Second)
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
+	token, _, err = makeTestToken(issuer, audience, access, &rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err = token.Verify(verifyOps); err == nil {
+	if _, err = token.Verify(verifyOps); err == nil {
 		t.Fatal("Verification should fail for token with nbf in the future outside leeway")
 	}
 
 	// exp verification should pass within leeway
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, time.Now(), time.Now().Add(-59*time.Second))
+	token, _, err = makeTestToken(issuer, audience, access, &rootKeys[0], 0, time.Now(), time.Now().Add(-59*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err = token.Verify(verifyOps); err != nil {
+	if _, err = token.Verify(verifyOps); err != nil {
 		t.Fatal(err)
 	}
 
 	// exp verification should fail with a skew larger than leeway
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, time.Now(), time.Now().Add(-60*time.Second))
+	token, _, err = makeTestToken(issuer, audience, access, &rootKeys[0], 0, time.Now(), time.Now().Add(-60*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err = token.Verify(verifyOps); err == nil {
+	if _, err = token.Verify(verifyOps); err == nil {
 		t.Fatal("Verification should fail for token with exp in the future outside leeway")
 	}
 }
 
-func writeTempRootCerts(rootKeys []libtrust.PrivateKey) (filename string, err error) {
+func writeTempRootCerts(rootKeys []Key) (filename string, err error) {
 	rootCerts, err := makeRootCerts(rootKeys)
 	if err != nil {
 		return "", err
@@ -370,20 +371,20 @@ func TestAccessController(t *testing.T) {
 	}
 
 	// 2. Supply an invalid token.
-	token, err := makeTestToken(
+	_, tokenString, err := makeTestToken(
 		issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{testAccess.Action},
 		}},
-		rootKeys[1], 1, time.Now(), time.Now().Add(5*time.Minute), // Everything is valid except the key which signed it.
+		&rootKeys[1], 1, time.Now(), time.Now().Add(5*time.Minute), // Everything is valid except the key which signed it.
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.compactRaw()))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
 
 	authCtx, err = accessController.Authorized(ctx, testAccess)
 	challenge, ok = err.(auth.Challenge)
@@ -400,16 +401,16 @@ func TestAccessController(t *testing.T) {
 	}
 
 	// 3. Supply a token with insufficient access.
-	token, err = makeTestToken(
+	_, tokenString, err = makeTestToken(
 		issuer, service,
 		[]*ResourceActions{}, // No access specified.
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		&rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.compactRaw()))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
 
 	authCtx, err = accessController.Authorized(ctx, testAccess)
 	challenge, ok = err.(auth.Challenge)
@@ -426,20 +427,20 @@ func TestAccessController(t *testing.T) {
 	}
 
 	// 4. Supply the token we need, or deserve, or whatever.
-	token, err = makeTestToken(
+	_, tokenString, err = makeTestToken(
 		issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{testAccess.Action},
 		}},
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		&rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.compactRaw()))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
 
 	authCtx, err = accessController.Authorized(ctx, testAccess)
 	if err != nil {
@@ -456,20 +457,20 @@ func TestAccessController(t *testing.T) {
 	}
 
 	// 5. Supply a token with full admin rights, which is represented as "*".
-	token, err = makeTestToken(
+	_, tokenString, err = makeTestToken(
 		issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{"*"},
 		}},
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		&rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.compactRaw()))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
 
 	_, err = accessController.Authorized(ctx, testAccess)
 	if err != nil {

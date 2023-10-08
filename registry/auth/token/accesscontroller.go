@@ -14,7 +14,6 @@ import (
 
 	dcontext "github.com/distribution/distribution/v3/context"
 	"github.com/distribution/distribution/v3/registry/auth"
-	"github.com/docker/libtrust"
 )
 
 // accessSet maps a typed, named resource to
@@ -132,7 +131,7 @@ type accessController struct {
 	issuer       string
 	service      string
 	rootCerts    *x509.CertPool
-	trustedKeys  map[string]libtrust.PublicKey
+	trustedKeys  map[string]crypto.PublicKey
 }
 
 // tokenAccessOptions is a convenience type for handling
@@ -212,14 +211,11 @@ func newAccessController(options map[string]interface{}) (auth.AccessController,
 	}
 
 	rootPool := x509.NewCertPool()
-	trustedKeys := make(map[string]libtrust.PublicKey, len(rootCerts))
+	trustedKeys := make(map[string]crypto.PublicKey, len(rootCerts))
 	for _, rootCert := range rootCerts {
 		rootPool.AddCert(rootCert)
-		pubKey, err := libtrust.FromCryptoPublicKey(crypto.PublicKey(rootCert.PublicKey))
-		if err != nil {
-			return nil, fmt.Errorf("unable to get public key from token auth root certificate: %s", err)
-		}
-		trustedKeys[pubKey.KeyID()] = pubKey
+		keyID := keyIDFromCryptoKey(rootCert.PublicKey)
+		trustedKeys[keyID] = crypto.PublicKey(rootCert.PublicKey)
 	}
 
 	return &accessController{
@@ -266,12 +262,13 @@ func (ac *accessController) Authorized(ctx context.Context, accessItems ...auth.
 		TrustedKeys:       ac.trustedKeys,
 	}
 
-	if err = token.Verify(verifyOpts); err != nil {
+	claims, err := token.Verify(verifyOpts)
+	if err != nil {
 		challenge.err = err
 		return nil, challenge
 	}
 
-	accessSet := token.accessSet()
+	accessSet := claims.accessSet()
 	for _, access := range accessItems {
 		if !accessSet.contains(access) {
 			challenge.err = ErrInsufficientScope
@@ -279,9 +276,9 @@ func (ac *accessController) Authorized(ctx context.Context, accessItems ...auth.
 		}
 	}
 
-	ctx = auth.WithResources(ctx, token.resources())
+	ctx = auth.WithResources(ctx, claims.resources())
 
-	return auth.WithUser(ctx, auth.UserInfo{Name: token.Claims.Subject}), nil
+	return auth.WithUser(ctx, auth.UserInfo{Name: claims.Subject}), nil
 }
 
 // init handles registering the token auth backend.

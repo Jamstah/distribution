@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base32"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -58,10 +59,10 @@ func createPemBlock(name string, derBytes []byte, headers map[string]interface{}
 			if k == "hosts" {
 				pemBlock.Headers[k] = strings.Join(val, ",")
 			} else {
-				return nil, fmt.Errorf("unsupported header value")
+				return nil, fmt.Errorf("unsupported header type: %s", k)
 			}
 		default:
-			// Return error, non-encodable type
+			return nil, errors.New("unsupported header value")
 		}
 	}
 

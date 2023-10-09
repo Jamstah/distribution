@@ -12,20 +12,20 @@ import (
 	"strings"
 )
 
-// Key is an asymetric pair of cryptographic keys.
-type Key struct {
+// key is an asymetric pair of cryptographic keys.
+type key struct {
 	priv crypto.PrivateKey
 	pub  crypto.PublicKey
 }
 
 // KeyID returns a kid compatible with
 // libtrust fingerprint format.
-func (k *Key) KeyID() string {
+func (k *key) KeyID() string {
 	return keyIDFromCryptoKey(k.pub)
 }
 
 // PEMBlock serializes this Private Key to DER-encoded PKIX format.
-func (k *Key) PEMBlock() (*pem.Block, error) {
+func (k *key) PEMBlock() (*pem.Block, error) {
 	var (
 		err      error
 		derBytes []byte

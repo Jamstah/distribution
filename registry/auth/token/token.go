@@ -54,6 +54,7 @@ type ClaimSet struct {
 
 // Token is a JSON Web Token.
 type Token struct {
+	Raw string
 	JWT *jwt.JSONWebToken
 }
 
@@ -75,6 +76,7 @@ func NewToken(rawToken string) (*Token, error) {
 	}
 
 	return &Token{
+		Raw: rawToken,
 		JWT: token,
 	}, nil
 }
@@ -127,7 +129,7 @@ func (t *Token) Verify(verifyOpts VerifyOptions) (*ClaimSet, error) {
 	return &claims, nil
 }
 
-// VerifySigningKey attempts to get the key which was used to sign this token and returns it.
+// VerifySigningKey attempts to verify and return the signing key which was used to sign the token.
 func (t *Token) VerifySigningKey(verifyOpts VerifyOptions) (signingKey crypto.PublicKey, err error) {
 	if len(t.JWT.Headers) == 0 {
 		return nil, ErrInvalidToken

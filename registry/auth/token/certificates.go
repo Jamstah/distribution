@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// NOTE(milosgajdos): certTemplateInfo type as well
+// as some of the functions in this file have been
+// adopted from https://github.com/docker/libtrust
+// and modiified to fit the purpose of the token package.
+
 type certTemplateInfo struct {
 	commonName  string
 	domains     []string
@@ -79,14 +84,14 @@ func generateCert(priv crypto.PrivateKey, pub crypto.PublicKey, subInfo, issInfo
 
 // GenerateCACert creates a certificate which can be used as a trusted
 // certificate authority.
-func GenerateCACert(signer Key, trustedKey crypto.PublicKey) (*x509.Certificate, error) {
+func GenerateCACert(signer key, trustedKey key) (*x509.Certificate, error) {
 	subjectInfo := &certTemplateInfo{
-		commonName: keyIDFromCryptoKey(trustedKey),
+		commonName: trustedKey.KeyID(),
 		isCA:       true,
 	}
 	issuerInfo := &certTemplateInfo{
-		commonName: keyIDFromCryptoKey(signer.pub),
+		commonName: signer.KeyID(),
 	}
 
-	return generateCert(signer.priv, trustedKey, subjectInfo, issuerInfo)
+	return generateCert(signer.priv, trustedKey.pub, subjectInfo, issuerInfo)
 }

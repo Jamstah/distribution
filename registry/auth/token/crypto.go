@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+// NOTE(milosgajdos): some of the functions in this
+// file have been adopted from https://github.com/docker/libtrust
+// and modiified to fit the purpose of the token package.
+
 // key is an asymetric pair of cryptographic keys.
 type key struct {
 	priv crypto.PrivateKey

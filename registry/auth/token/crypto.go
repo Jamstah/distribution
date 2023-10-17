@@ -74,15 +74,18 @@ func createPemBlock(name string, derBytes []byte, headers map[string]interface{}
 }
 
 func keyIDEncode(b []byte) string {
-	s := strings.TrimRight(base32.StdEncoding.EncodeToString(b), "=")
-	var buf bytes.Buffer
-	var i int
-	for i = 0; i < len(s)/4-1; i++ {
-		start := i * 4
-		end := start + 4
-		buf.WriteString(s[start:end] + ":")
+	if len(b) == 0 {
+		return ""
 	}
-	buf.WriteString(s[i*4:])
+	s := strings.TrimRight(base32.StdEncoding.EncodeToString(b), "=")
+	var buf strings.Builder
+	buf.Grow(len(s) * 5 / 4)
+	for len(s) > 4 {
+		buf.WriteString(s[:4])
+		buf.WriteByte(':')
+		s = s[4:]
+	}
+	buf.WriteString(s)
 	return buf.String()
 }
 

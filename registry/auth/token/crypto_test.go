@@ -33,11 +33,14 @@ func (k *key) PEMBlock() (*pem.Block, error) {
 	var (
 		err      error
 		derBytes []byte
+		name     string
 	)
 	switch cryptoPrivateKey := k.priv.(type) {
 	case *ecdsa.PrivateKey:
+		name = "EC PRIVATE KEY"
 		derBytes, err = x509.MarshalECPrivateKey(cryptoPrivateKey)
 	case *rsa.PrivateKey:
+		name = "RSA PRIVATE KEY"
 		derBytes = x509.MarshalPKCS1PrivateKey(cryptoPrivateKey)
 	default:
 		return nil, fmt.Errorf("private key type %T is not supported", cryptoPrivateKey)
@@ -49,7 +52,7 @@ func (k *key) PEMBlock() (*pem.Block, error) {
 	headers := map[string]interface{}{
 		"keyID": k.KeyID(),
 	}
-	return createPemBlock("PRIVATE KEY", derBytes, headers)
+	return createPemBlock(name, derBytes, headers)
 }
 
 func createPemBlock(name string, derBytes []byte, headers map[string]interface{}) (*pem.Block, error) {

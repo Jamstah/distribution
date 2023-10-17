@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -22,16 +23,6 @@ import (
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 )
-
-func makeTrustedKeyMap(rootKeys []key) map[string]crypto.PublicKey {
-	trustedKeys := make(map[string]crypto.PublicKey, len(rootKeys))
-
-	for _, rootKey := range rootKeys {
-		trustedKeys[rootKey.KeyID()] = rootKey.pub
-	}
-
-	return trustedKeys
-}
 
 func makeRootKeys(numKeys int) ([]key, error) {
 	rootKeys := make([]key, 0, numKeys)
@@ -104,12 +95,7 @@ func makeSigningKeyWithChain(rootKey key, depth int) (*jose.JSONWebKey, error) {
 	}, nil
 }
 
-func makeTestToken(issuer, audience string, access []*ResourceActions, rootKey key, depth int, now time.Time, exp time.Time) (*Token, error) {
-	jwk, err := makeSigningKeyWithChain(rootKey, depth)
-	if err != nil {
-		return nil, fmt.Errorf("unable to make signing key with chain: %s", err)
-	}
-
+func makeTestToken(jwk *jose.JSONWebKey, issuer, audience string, access []*ResourceActions, now time.Time, exp time.Time) (*Token, error) {
 	signingKey := jose.SigningKey{
 		Algorithm: jose.ES256,
 		Key:       jwk,
@@ -265,12 +251,17 @@ func TestTokenVerify(t *testing.T) {
 		rootPool.AddCert(rootCert)
 	}
 
-	trustedKeys := makeTrustedKeyMap(rootKeys)
-
 	tokens := make([]*Token, 0, numTokens)
+	trustedKeys := map[string]crypto.PublicKey{}
 
 	for i := 0; i < numTokens; i++ {
-		token, err := makeTestToken(issuer, audience, access, rootKeys[i], i, time.Now(), time.Now().Add(5*time.Minute))
+		jwk, err := makeSigningKeyWithChain(rootKeys[i], i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// add to trusted keys
+		trustedKeys[jwk.KeyID] = jwk.Public()
+		token, err := makeTestToken(jwk, issuer, audience, access, time.Now(), time.Now().Add(5*time.Minute))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +302,14 @@ func TestLeeway(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	trustedKeys := makeTrustedKeyMap(rootKeys)
+	jwk, err := makeSigningKeyWithChain(rootKeys[0], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trustedKeys := map[string]crypto.PublicKey{
+		jwk.KeyID: jwk.Public(),
+	}
 
 	verifyOps := VerifyOptions{
 		TrustedIssuers:    []string{issuer},
@@ -322,7 +320,7 @@ func TestLeeway(t *testing.T) {
 
 	// nbf verification should pass within leeway
 	futureNow := time.Now().Add(time.Duration(5) * time.Second)
-	token, err := makeTestToken(issuer, audience, access, rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
+	token, err := makeTestToken(jwk, issuer, audience, access, futureNow, futureNow.Add(5*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +331,7 @@ func TestLeeway(t *testing.T) {
 
 	// nbf verification should fail with a skew larger than leeway
 	futureNow = time.Now().Add(time.Duration(61) * time.Second)
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, futureNow, futureNow.Add(5*time.Minute))
+	token, err = makeTestToken(jwk, issuer, audience, access, futureNow, futureNow.Add(5*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +341,7 @@ func TestLeeway(t *testing.T) {
 	}
 
 	// exp verification should pass within leeway
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, time.Now(), time.Now().Add(-59*time.Second))
+	token, err = makeTestToken(jwk, issuer, audience, access, time.Now(), time.Now().Add(-59*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +351,7 @@ func TestLeeway(t *testing.T) {
 	}
 
 	// exp verification should fail with a skew larger than leeway
-	token, err = makeTestToken(issuer, audience, access, rootKeys[0], 0, time.Now(), time.Now().Add(-60*time.Second))
+	token, err = makeTestToken(jwk, issuer, audience, access, time.Now(), time.Now().Add(-60*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,6 +386,31 @@ func writeTempRootCerts(rootKeys []key) (filename string, err error) {
 	return tempFile.Name(), nil
 }
 
+func writeTempJWKS(rootKeys []key) (filename string, err error) {
+	keys := make([]jose.JSONWebKey, len(rootKeys))
+	for i := range rootKeys {
+		jwk, err := makeSigningKeyWithChain(rootKeys[i], i)
+		if err != nil {
+			return "", err
+		}
+		keys[i] = *jwk
+	}
+	jwks := jose.JSONWebKeySet{
+		Keys: keys,
+	}
+	tempFile, err := os.CreateTemp("", "jwksBundle")
+	if err != nil {
+		return "", err
+	}
+	defer tempFile.Close()
+
+	if err := json.NewEncoder(tempFile).Encode(jwks); err != nil {
+		return "", err
+	}
+
+	return tempFile.Name(), nil
+}
+
 // TestAccessController tests complete integration of the token auth package.
 // It starts by mocking the options for a token auth accessController which
 // it creates. It then tries a few mock requests:
@@ -408,6 +431,11 @@ func TestAccessController(t *testing.T) {
 	}
 	defer os.Remove(rootCertBundleFilename)
 
+	jwksFilename, err := writeTempJWKS(rootKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	realm := "https://auth.example.com/token/"
 	issuer := "test-issuer.example.com"
 	service := "test-service.example.com"
@@ -418,6 +446,7 @@ func TestAccessController(t *testing.T) {
 		"service":        service,
 		"rootcertbundle": rootCertBundleFilename,
 		"autoredirect":   false,
+		"jwks":           jwksFilename,
 	}
 
 	accessController, err := newAccessController(options)
@@ -455,14 +484,19 @@ func TestAccessController(t *testing.T) {
 	}
 
 	// 2. Supply an invalid token.
+	invalidJwk, err := makeSigningKeyWithChain(rootKeys[1], 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	token, err := makeTestToken(
-		issuer, service,
+		invalidJwk, issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{testAccess.Action},
 		}},
-		rootKeys[1], 1, time.Now(), time.Now().Add(5*time.Minute), // Everything is valid except the key which signed it.
+		time.Now(), time.Now().Add(5*time.Minute), // Everything is valid except the key which signed it.
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -484,11 +518,17 @@ func TestAccessController(t *testing.T) {
 		t.Fatalf("expected nil auth context but got %s", authCtx)
 	}
 
+	// create a valid jwk
+	jwk, err := makeSigningKeyWithChain(rootKeys[0], 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// 3. Supply a token with insufficient access.
 	token, err = makeTestToken(
-		issuer, service,
+		jwk, issuer, service,
 		[]*ResourceActions{}, // No access specified.
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -512,13 +552,13 @@ func TestAccessController(t *testing.T) {
 
 	// 4. Supply the token we need, or deserve, or whatever.
 	token, err = makeTestToken(
-		issuer, service,
+		jwk, issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{testAccess.Action},
 		}},
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -542,13 +582,13 @@ func TestAccessController(t *testing.T) {
 
 	// 5. Supply a token with full admin rights, which is represented as "*".
 	token, err = makeTestToken(
-		issuer, service,
+		jwk, issuer, service,
 		[]*ResourceActions{{
 			Type:    testAccess.Type,
 			Name:    testAccess.Name,
 			Actions: []string{"*"},
 		}},
-		rootKeys[0], 1, time.Now(), time.Now().Add(5*time.Minute),
+		time.Now(), time.Now().Add(5*time.Minute),
 	)
 	if err != nil {
 		t.Fatal(err)

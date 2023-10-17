@@ -142,7 +142,7 @@ func (t *Token) VerifySigningKey(verifyOpts VerifyOptions) (signingKey crypto.Pu
 
 	switch {
 	case header.JSONWebKey != nil:
-		signingKey, err = verifyJWK(header.JSONWebKey, verifyOpts)
+		signingKey, err = verifyJWK(header, verifyOpts)
 	case len(header.KeyID) > 0:
 		signingKey = verifyOpts.TrustedKeys[header.KeyID]
 		if signingKey == nil {
@@ -172,7 +172,8 @@ func verifyCertChain(header jose.Header, roots *x509.CertPool) (signingKey crypt
 	return
 }
 
-func verifyJWK(jwk *jose.JSONWebKey, verifyOpts VerifyOptions) (signingKey crypto.PublicKey, err error) {
+func verifyJWK(header jose.Header, verifyOpts VerifyOptions) (signingKey crypto.PublicKey, err error) {
+	jwk := header.JSONWebKey
 	signingKey = jwk.Key
 
 	// Check to see if the key includes a certificate chain.

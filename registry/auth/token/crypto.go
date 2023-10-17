@@ -1,7 +1,6 @@
 package token
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -50,7 +49,7 @@ func (k *key) PEMBlock() (*pem.Block, error) {
 	headers := map[string]interface{}{
 		"keyID": k.KeyID(),
 	}
-	return createPemBlock("EC PRIVATE KEY", derBytes, headers)
+	return createPemBlock("PRIVATE KEY", derBytes, headers)
 }
 
 func createPemBlock(name string, derBytes []byte, headers map[string]interface{}) (*pem.Block, error) {

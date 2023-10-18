@@ -24,22 +24,21 @@ import (
 	"github.com/go-jose/go-jose/v3/jwt"
 )
 
-func makeRootKeys(numKeys int) ([]key, error) {
-	rootKeys := make([]key, 0, numKeys)
+func makeRootKeys(numKeys int) ([]*ecdsa.PrivateKey, error) {
+	rootKeys := make([]*ecdsa.PrivateKey, 0, numKeys)
 
 	for i := 0; i < numKeys; i++ {
 		pk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, err
 		}
-		rootKey := key{priv: pk, pub: pk.Public()}
-		rootKeys = append(rootKeys, rootKey)
+		rootKeys = append(rootKeys, pk)
 	}
 
 	return rootKeys, nil
 }
 
-func makeRootCerts(rootKeys []key) ([]*x509.Certificate, error) {
+func makeRootCerts(rootKeys []*ecdsa.PrivateKey) ([]*x509.Certificate, error) {
 	rootCerts := make([]*x509.Certificate, 0, len(rootKeys))
 
 	for _, rootKey := range rootKeys {
@@ -53,12 +52,12 @@ func makeRootCerts(rootKeys []key) ([]*x509.Certificate, error) {
 	return rootCerts, nil
 }
 
-func makeSigningKeyWithChain(rootKey key, depth int) (*jose.JSONWebKey, error) {
+func makeSigningKeyWithChain(rootKey *ecdsa.PrivateKey, depth int) (*jose.JSONWebKey, error) {
 	if depth == 0 {
 		// Don't need to build a chain.
 		return &jose.JSONWebKey{
-			Key:       rootKey.priv,
-			KeyID:     rootKey.KeyID(),
+			Key:       rootKey,
+			KeyID:     rootKey.X.String(),
 			Algorithm: string(jose.ES256),
 		}, nil
 	}
@@ -77,19 +76,19 @@ func makeSigningKeyWithChain(rootKey key, depth int) (*jose.JSONWebKey, error) {
 			return nil, err
 		}
 
-		trustedKey := key{priv: pk, pub: pk.Public()}
+		trustedKey := pk
 		if cert, err = generateCACert(parentKey, trustedKey); err != nil {
 			return nil, err
 		}
 
 		depth--
 		certs[depth] = cert
-		parentKey = key{priv: pk, pub: pk.Public()}
+		parentKey = pk
 	}
 
 	return &jose.JSONWebKey{
-		Key:          parentKey.priv,
-		KeyID:        rootKey.KeyID(),
+		Key:          parentKey,
+		KeyID:        rootKey.X.String(),
 		Algorithm:    string(jose.ES256),
 		Certificates: certs,
 	}, nil
@@ -207,16 +206,16 @@ func generateCert(priv crypto.PrivateKey, pub crypto.PublicKey, subInfo, issInfo
 
 // generateCACert creates a certificate which can be used as a trusted
 // certificate authority.
-func generateCACert(signer key, trustedKey key) (*x509.Certificate, error) {
+func generateCACert(signer *ecdsa.PrivateKey, trustedKey *ecdsa.PrivateKey) (*x509.Certificate, error) {
 	subjectInfo := &certTemplateInfo{
-		commonName: trustedKey.KeyID(),
+		commonName: trustedKey.X.String(),
 		isCA:       true,
 	}
 	issuerInfo := &certTemplateInfo{
-		commonName: signer.KeyID(),
+		commonName: signer.X.String(),
 	}
 
-	return generateCert(signer.priv, trustedKey.pub, subjectInfo, issuerInfo)
+	return generateCert(signer, trustedKey.Public(), subjectInfo, issuerInfo)
 }
 
 // This test makes 4 tokens with a varying number of intermediate
@@ -361,7 +360,7 @@ func TestLeeway(t *testing.T) {
 	}
 }
 
-func writeTempRootCerts(rootKeys []key) (filename string, err error) {
+func writeTempRootCerts(rootKeys []*ecdsa.PrivateKey) (filename string, err error) {
 	rootCerts, err := makeRootCerts(rootKeys)
 	if err != nil {
 		return "", err
@@ -386,7 +385,7 @@ func writeTempRootCerts(rootKeys []key) (filename string, err error) {
 	return tempFile.Name(), nil
 }
 
-func writeTempJWKS(rootKeys []key) (filename string, err error) {
+func writeTempJWKS(rootKeys []*ecdsa.PrivateKey) (filename string, err error) {
 	keys := make([]jose.JSONWebKey, len(rootKeys))
 	for i := range rootKeys {
 		jwk, err := makeSigningKeyWithChain(rootKeys[i], i)
@@ -621,14 +620,17 @@ func TestNewAccessControllerPemBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyBlock, err := rootKeys[0].PEMBlock()
+
+	bytes, err := x509.MarshalECPrivateKey(rootKeys[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = pem.Encode(file, keyBlock)
+
+	_, err = file.Write(bytes)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	err = file.Close()
 	if err != nil {
 		t.Fatal(err)

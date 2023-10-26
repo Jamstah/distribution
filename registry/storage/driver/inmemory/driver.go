@@ -174,6 +174,21 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
 }
 
+// Stat retrieves the FileInfo for the given file, including the current size
+// in bytes and the creation time.
+func (d *driver) StatFile(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+	fi, err := d.Stat(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if fi.IsDir() {
+		return nil, storagedriver.PathNotFoundError{Path: path}
+	}
+
+	return fi, nil
+}
+
 // List returns a list of the objects that are direct descendants of the given
 // path.
 func (d *driver) List(ctx context.Context, path string) ([]string, error) {

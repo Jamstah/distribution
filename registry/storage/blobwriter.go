@@ -299,7 +299,7 @@ func (bw *blobWriter) moveBlob(ctx context.Context, desc distribution.Descriptor
 	}
 
 	// Check for existence
-	if _, err := bw.blobStore.driver.Stat(ctx, blobPath); err != nil {
+	if _, err := bw.blobStore.driver.StatFile(ctx, blobPath); err != nil {
 		switch err := err.(type) {
 		case storagedriver.PathNotFoundError:
 			break // ensure that it doesn't exist.
@@ -318,7 +318,7 @@ func (bw *blobWriter) moveBlob(ctx context.Context, desc distribution.Descriptor
 	// the size here and write a zero-length file to blobPath if this is the
 	// case. For the most part, this should only ever happen with zero-length
 	// blobs.
-	if _, err := bw.blobStore.driver.Stat(ctx, bw.path); err != nil {
+	if _, err := bw.blobStore.driver.StatFile(ctx, bw.path); err != nil {
 		switch err := err.(type) {
 		case storagedriver.PathNotFoundError:
 			// HACK(stevvooe): This is slightly dangerous: if we verify above,
@@ -379,7 +379,7 @@ func (bw *blobWriter) Reader() (io.ReadCloser, error) {
 	// todo(richardscothern): Change to exponential backoff, i=0.5, e=2, n=4
 	try := 1
 	for try <= 5 {
-		_, err := bw.driver.Stat(bw.ctx, bw.path)
+		_, err := bw.driver.StatFile(bw.ctx, bw.path)
 		if err == nil {
 			break
 		}

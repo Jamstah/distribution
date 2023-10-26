@@ -238,7 +238,7 @@ func (ttles *TTLExpirationScheduler) writeState() error {
 }
 
 func (ttles *TTLExpirationScheduler) readState() error {
-	if _, err := ttles.driver.Stat(ttles.ctx, ttles.pathToStateFile); err != nil {
+	if _, err := ttles.driver.StatFile(ttles.ctx, ttles.pathToStateFile); err != nil {
 		switch err := err.(type) {
 		case driver.PathNotFoundError:
 			return nil

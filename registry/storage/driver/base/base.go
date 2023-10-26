@@ -161,6 +161,21 @@ func (base *Base) Stat(ctx context.Context, path string) (storagedriver.FileInfo
 	return fi, base.setDriverName(e)
 }
 
+// StatFile wraps StatFile of underlying storage driver.
+func (base *Base) StatFile(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+	ctx, done := dcontext.WithTrace(ctx)
+	defer done("%s.StatFile(%q)", base.Name(), path)
+
+	if !storagedriver.PathRegexp.MatchString(path) && path != "/" {
+		return nil, storagedriver.InvalidPathError{Path: path, DriverName: base.StorageDriver.Name()}
+	}
+
+	start := time.Now()
+	fi, e := base.StorageDriver.StatFile(ctx, path)
+	storageAction.WithValues(base.Name(), "StatFile").UpdateSince(start)
+	return fi, base.setDriverName(e)
+}
+
 // List wraps List of underlying storage driver.
 func (base *Base) List(ctx context.Context, path string) ([]string, error) {
 	ctx, done := dcontext.WithTrace(ctx)

@@ -79,6 +79,11 @@ type StorageDriver interface {
 	// size in bytes and the creation time.
 	Stat(ctx context.Context, path string) (FileInfo, error)
 
+	// Stat retrieves the FileInfo for the given file, including the current
+	// size in bytes and the creation time. Directories are returned as not
+	// existing.
+	StatFile(ctx context.Context, path string) (FileInfo, error)
+
 	// List returns a list of the objects that are direct descendants of the
 	// given path.
 	List(ctx context.Context, path string) ([]string, error)

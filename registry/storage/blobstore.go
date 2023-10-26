@@ -169,7 +169,7 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 		return distribution.Descriptor{}, err
 	}
 
-	fi, err := bs.driver.Stat(ctx, path)
+	fi, err := bs.driver.StatFile(ctx, path)
 	if err != nil {
 		switch err := err.(type) {
 		case driver.PathNotFoundError:
@@ -177,14 +177,6 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 		default:
 			return distribution.Descriptor{}, err
 		}
-	}
-
-	if fi.IsDir() {
-		// NOTE(stevvooe): This represents a corruption situation. Somehow, we
-		// calculated a blob path and then detected a directory. We log the
-		// error and then error on the side of not knowing about the blob.
-		dcontext.GetLogger(ctx).Warnf("blob path should not be a directory: %q", path)
-		return distribution.Descriptor{}, distribution.ErrBlobUnknown
 	}
 
 	// TODO(stevvooe): Add method to resolve the mediatype. We can store and

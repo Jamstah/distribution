@@ -144,6 +144,15 @@ func (r *regulator) Stat(ctx context.Context, path string) (storagedriver.FileIn
 	return r.StorageDriver.Stat(ctx, path)
 }
 
+// Stat retrieves the FileInfo for the given file, including the current
+// size in bytes and the creation time.
+func (r *regulator) StatFile(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+	r.enter()
+	defer r.exit()
+
+	return r.StorageDriver.StatFile(ctx, path)
+}
+
 // List returns a list of the objects that are direct descendants of the
 // given path.
 func (r *regulator) List(ctx context.Context, path string) ([]string, error) {

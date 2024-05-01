@@ -236,19 +236,19 @@ func (registry *Registry) ListenAndServe() error {
 		if !ok {
 			return fmt.Errorf("unknown minimum TLS level '%s' specified for http.tls.minimumtls", config.HTTP.TLS.MinimumTLS)
 		}
-		dcontext.GetLogger(registry.app).Infof("restricting TLS version to %s or higher", config.HTTP.TLS.MinimumTLS)
+		dcontext.GetLogger(registry.app.Context).Infof("restricting TLS version to %s or higher", config.HTTP.TLS.MinimumTLS)
 
 		var tlsCipherSuites []uint16
 		// configuring cipher suites are no longer supported after the tls1.3.
 		// (https://go.dev/blog/tls-cipher-suites)
 		if tlsMinVersion > tls.VersionTLS12 {
-			dcontext.GetLogger(registry.app).Warnf("restricting TLS cipher suites to empty. Because configuring cipher suites is no longer supported in %s", config.HTTP.TLS.MinimumTLS)
+			dcontext.GetLogger(registry.app.Context).Warnf("restricting TLS cipher suites to empty. Because configuring cipher suites is no longer supported in %s", config.HTTP.TLS.MinimumTLS)
 		} else {
 			tlsCipherSuites, err = getCipherSuites(config.HTTP.TLS.CipherSuites)
 			if err != nil {
 				return err
 			}
-			dcontext.GetLogger(registry.app).Infof("restricting TLS cipher suites to: %s", strings.Join(getCipherSuiteNames(tlsCipherSuites), ","))
+			dcontext.GetLogger(registry.app.Context).Infof("restricting TLS cipher suites to: %s", strings.Join(getCipherSuiteNames(tlsCipherSuites), ","))
 		}
 
 		tlsConf := &tls.Config{
@@ -294,7 +294,7 @@ func (registry *Registry) ListenAndServe() error {
 			}
 
 			for _, subj := range pool.Subjects() { //nolint:staticcheck // FIXME(thaJeztah): ignore SA1019: ac.(*accessController).rootCerts.Subjects has been deprecated since Go 1.18: if s was returned by SystemCertPool, Subjects will not include the system roots. (staticcheck)
-				dcontext.GetLogger(registry.app).Debugf("CA Subject: %s", string(subj))
+				dcontext.GetLogger(registry.app.Context).Debugf("CA Subject: %s", string(subj))
 			}
 
 			tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
@@ -302,9 +302,9 @@ func (registry *Registry) ListenAndServe() error {
 		}
 
 		ln = tls.NewListener(ln, tlsConf)
-		dcontext.GetLogger(registry.app).Infof("listening on %v, tls", ln.Addr())
+		dcontext.GetLogger(registry.app.Context).Infof("listening on %v, tls", ln.Addr())
 	} else {
-		dcontext.GetLogger(registry.app).Infof("listening on %v", ln.Addr())
+		dcontext.GetLogger(registry.app.Context).Infof("listening on %v", ln.Addr())
 	}
 
 	if config.HTTP.DrainTimeout == 0 {
@@ -324,7 +324,7 @@ func (registry *Registry) ListenAndServe() error {
 	case err := <-serveErr:
 		return err
 	case <-registry.quit:
-		dcontext.GetLogger(registry.app).Info("stopping server gracefully. Draining connections for ", config.HTTP.DrainTimeout)
+		dcontext.GetLogger(registry.app.Context).Info("stopping server gracefully. Draining connections for ", config.HTTP.DrainTimeout)
 		// shutdown the server with a grace period of configured timeout
 		c, cancel := context.WithTimeout(context.Background(), config.HTTP.DrainTimeout)
 		defer cancel()
